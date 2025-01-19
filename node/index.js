@@ -49,6 +49,8 @@ let ACCESS_TOKEN = null;
 let USER_TOKEN = null;
 let PUBLIC_TOKEN = null;
 let ITEM_ID = null;
+const db = require('./db');
+
 let ACCOUNT_ID = null;
 // The payment_id is only relevant for the UK/EU Payment Initiation product.
 // We store the payment_id in memory - in production, store it in a secure
@@ -170,7 +172,6 @@ app.post('/api/create_user_token', function (request, response, next) {
     }).catch(next);
 });
 
-
 // Create a link token with configs which we can then use to initialize Plaid Link client-side
 // for a 'payment-initiation' flow.
 // See:
@@ -243,23 +244,39 @@ app.post(
 // an API access_token
 // https://plaid.com/docs/#exchange-token-flow
 app.post('/api/set_access_token', function (request, response, next) {
+  if (!request.body.public_token) {
+    return response.status(400).json({ error: 'Missing public_token in request body' });
+  }
+  
   PUBLIC_TOKEN = request.body.public_token;
   Promise.resolve()
     .then(async function () {
       const tokenResponse = await client.itemPublicTokenExchange({
         public_token: PUBLIC_TOKEN,
       });
-      prettyPrintResponse(tokenResponse);
-      ACCESS_TOKEN = tokenResponse.data.access_token;
-      ITEM_ID = tokenResponse.data.item_id;
+      
+      if (!tokenResponse || !tokenResponse.data) {
+        throw new Error('Invalid token response from Plaid');
+      }
+      
+      await db.saveTokens(
+        tokenResponse.data.access_token,
+        tokenResponse.data.item_id,
+        tokenResponse.data.user_token,
+        PUBLIC_TOKEN,
+      );
+      
+      const tokens = await db.getTokens();
       response.json({
-        // the 'access_token' is a private token, DO NOT pass this token to the frontend in your production environment
-        access_token: ACCESS_TOKEN,
-        item_id: ITEM_ID,
+        access_token: tokenResponse.data.access_token,
+        item_id: tokenResponse.data.item_id,
         error: null,
       });
     })
-    .catch(next);
+    .catch((err) => {
+      console.error('Error in /api/set_access_token:', err);
+      response.status(500).json({ error: err.message });
+    });
 });
 
 // Retrieve ACH or ETF Auth data for an Item's accounts
@@ -552,6 +569,29 @@ app.get('/api/income/verification/paystubs', function (request, response, next) 
     .catch(next);
 })
 
+// Add this new endpoint to view database contents
+app.get('/api/db/tokens', function (request, response, next) {
+  console.log('Accessing /api/db/tokens endpoint');
+  Promise.resolve()
+    .then(async function () {
+      console.log('Getting tokens from database...');
+      const tokens = await db.getAllTokens();
+      console.log('Retrieved tokens:', tokens);
+      response.json(tokens || []);
+    })
+    .catch((error) => {
+      console.error('Error accessing database:', error);
+      next(error);
+    });
+});
+
+// Error handler should be last
+app.use('/api', function (error, request, response, next) {
+  console.log(error);
+  prettyPrintResponse(error.response);
+  response.json(formatError(error.response));
+});
+
 const server = app.listen(APP_PORT, function () {
   console.log('plaid-quickstart server listening on port ' + APP_PORT);
 });
@@ -622,6 +662,7 @@ app.get('/api/transfer_authorize', function (request, response, next) {
     .catch(next);
 });
 
+// ... rest of the code remains the same ....tables
 
 app.get('/api/transfer_create', function (request, response, next) {
   Promise.resolve()

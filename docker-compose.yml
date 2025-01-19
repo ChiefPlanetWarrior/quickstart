@@ -41,6 +41,8 @@ services:
     ports: ["8000:8000"]
     environment:
       <<: *QUICKSTART_ENVIRONMENT
+    volumes:
+      - ./node/data:/opt/app/data
   python:
     networks:
       - "quickstart"
